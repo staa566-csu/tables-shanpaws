@@ -1,0 +1,282 @@
+---
+title: "Homework 4"
+author: "shannon jaskiewicz"
+date: '2022-10-13'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r, echo = FALSE}
+
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(plotly))
+suppressPackageStartupMessages(library(tigris))
+suppressPackageStartupMessages(library(geofacet))
+suppressPackageStartupMessages(library(leaflet))
+suppressPackageStartupMessages(library(leafpop))
+suppressPackageStartupMessages(library(statebins))
+suppressPackageStartupMessages(library(raster))
+suppressPackageStartupMessages(library(sf))
+suppressPackageStartupMessages(library(spData))
+suppressPackageStartupMessages(library(tmap))
+suppressPackageStartupMessages(library(ggdendro))
+suppressPackageStartupMessages(library(mapview))
+# suppressPackageStartupMessages(library(kable))
+suppressPackageStartupMessages(library(kableExtra))
+suppressPackageStartupMessages(library(sparkline))
+suppressPackageStartupMessages(library(DT))
+suppressPackageStartupMessages(library(reactable))
+suppressPackageStartupMessages(library(table1))
+suppressPackageStartupMessages(library(DescrTab2))
+suppressPackageStartupMessages(library(gt))
+```
+
+
+
+I wanted to look at COVID data for the state of Iowa and drill down to the county level to see if there are any disparities between cases per 100,000 population and deaths per 100,000 population.
+
+It is important to note which counties don't have a lot of cases but do have a lot of deaths, relatively speaking.  Since many guidelines and practices were established at the local level, it is reasonable to expect differences in outcomes across the counties.  It would be beneficial to see if there are any counties who do have a lot of cases but not a lot of deaths, relatively speaking.  So I created a column that has ratio of cases to deaths.  Low numbers signify counties that had/have a lot of deaths relative to their number of cases.  Conversely, high numbers indicate the counties had/have fewer deaths relative to their number of cases.  (I wanted to conditionally format the top 10% and bottom 10% but failed to get it to work.)
+
+I chose to look at the first quarters of 2021 and 2022, as the winter months seemed to be most intense in terms of COVID.  I thought I would be able to just sum the 1-day counts for cases and deaths for each county during the time period, but it turns out the numbers repeated for every latitude and longitude combination.  In other words, the numbers were inflated.  If a county had 17 different latitude-longitude pairs, then their county sums were 17 times the actual cases and deaths.  Being new to R, I ultimately learned about the slice() function and finally straightened out this particular problem.  
+
+
+```{r, eval = FALSE}
+
+# get code from the class github to download covid data
+
+rm(list=ls())
+library(tidyverse)
+library(tidycensus)
+
+# download data
+
+covid.state <- read_csv("https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-states.csv")
+covid.state2 <- covid.state %>%
+  arrange(state,date) %>%
+  group_by(state) %>%
+  mutate(cases.1day  = cases  - lag(cases,1),
+         deaths.1day = deaths - lag(deaths,1),
+         cases.7day  = zoo::rollmean(cases.1day, 7, fill=NA, align="right"),
+         deaths.7day = zoo::rollmean(deaths.1day, 7, fill=NA, align="right"),
+         cases.14day  = zoo::rollmean(cases.1day, 14, fill=NA, align="right"),
+         deaths.14day = zoo::rollmean(deaths.1day, 14, fill=NA, align="right"))
+# head(covid.state2, n=20)
+
+covid.county <- read_csv("https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties.csv")
+covid.county2 <- covid.county %>%
+  arrange(state,county,date) %>%
+  group_by(county) %>%
+  mutate(cases.1day  = cases  - lag(cases,1),
+         deaths.1day = deaths - lag(deaths,1),
+         cases.7day  = zoo::rollmean(cases.1day, 7, fill=NA, align="right"),
+         deaths.7day = zoo::rollmean(deaths.1day, 7, fill=NA, align="right"),
+         cases.14day  = zoo::rollmean(cases.1day, 14, fill=NA, align="right"),
+         deaths.14day = zoo::rollmean(deaths.1day, 14, fill=NA, align="right"))
+# head(covid.county2, n=20)
+
+# get and save api key
+
+apikey <- "123"
+census.api.key("123", install=TRUE, overwrite = TRUE)
+```
+
+
+```{r, eval = FALSE}
+readRenviron("~/.Renviron")
+Sys.getenv("CENSUS.API.KEY")
+```
+
+
+```{r, eval = FALSE}
+
+# get variables and codes (as per github)
+View(sf1)
+
+sf1 <- load_variables(2010, "sf1", cache = TRUE)
+head(sf1)
+
+# get population data
+
+state.pop <- get_decennial(geography = "state", 
+                           variables = "P001001", 
+                           year = 2010)
+# head(state.pop)
+
+
+
+county.pop <- get_decennial(geography = "county", 
+                           variables = "P001001", 
+                           year = 2010)
+# head(county.pop)
+
+
+# merge population and covid data
+# state.pop <- state.pop %>% select(fips=GEOID, pop2010=value)
+names(state.pop)[names(state.pop) == "GEOID"] <- "fips"
+names(state.pop)[names(state.pop) == "value"] <- "pop2010"
+# head(state.pop)
+
+# county.pop2 <- county.pop %>% select(fips=GEOID, pop2010=value)
+names(county.pop)[names(county.pop) == "GEOID"] <- "fips"
+names(county.pop)[names(county.pop) == "value"] <- "pop2010"
+# head(county.pop)
+
+# normalize state cases
+covid.state3 <- covid.state %>% 
+  left_join(state.pop, by="fips") %>%
+  mutate(cases.per1k = 1000*cases / pop2010,
+         deaths.per1k = 1000*deaths / pop2010,
+         cases.1day.per100k = 100000*cases.1day/pop2010,
+         deaths.1day.per100k = 100000*deaths.1day/pop2010,
+         cases.7day.per100k = 100000*cases.7day/pop2010,
+         deaths.7day.per100k = 100000*deaths.7day/pop2010,
+         cases.14day.per100k = 100000*cases.14day/pop2010,
+         deaths.14day.per100k = 100000*deaths.14day/pop2010)
+save(covid.state3, file="covid.state3.rda")
+# dim(covid.state3)
+
+# normalize county cases
+covid.county3 <- covid.county2 %>% 
+  left_join(county.pop, by="fips") %>%
+  mutate(cases.per1k = 1000*cases / pop2010,
+         deaths.per1k = 1000*deaths / pop2010,
+         cases.1day.per100k = 100000*cases.1day/pop2010,
+         deaths.1day.per100k = 100000*deaths.1day/pop2010,
+         cases.7day.per100k = 100000*cases.7day/pop2010,
+         deaths.7day.per100k = 100000*deaths.7day/pop2010,
+         cases.14day.per100k = 100000*cases.14day/pop2010,
+         deaths.14day.per100k = 100000*deaths.14day/pop2010)
+save(covid.county3, file="covid.county3.rda")
+# dim(covid.county3)
+```
+
+
+
+```{r}
+load(file = 'covid.state3.rda')
+load(file = 'covid.county3.rda')
+
+# get longitude and latitudes for the U.S.
+us.counties.covid <- map_data("county") %>%
+  mutate(region = str_to_title(region),
+         subregion = str_to_title(subregion)) %>%
+  left_join(covid.county3 %>%
+              filter(date == max(date)),
+            by = c("region" = "state", "subregion" = "county"))
+us.counties.covid.21q1 <- map_data("county") %>%
+  mutate(region = str_to_title(region),
+         subregion = str_to_title(subregion)) %>%
+  left_join(covid.county3 %>%
+              filter(between(date, as.Date('2020-12-31'), as.Date('2021-03-31'))),
+            by = c("region" = "state", "subregion" = "county"))
+us.counties.covid.22q1 <- map_data("county") %>%
+  mutate(region = str_to_title(region),
+         subregion = str_to_title(subregion)) %>%
+  left_join(covid.county3 %>%
+              filter(between(date, as.Date('2021-12-31'), as.Date('2022-03-31'))),
+            by = c("region" = "state", "subregion" = "county"))
+
+# subset for the state of Iowa
+iowa.counties.covid <- us.counties.covid %>%
+  dplyr::select(date, region, subregion, pop2010, cases, cases.1day, deaths, deaths.1day) %>%
+  filter(region == "Iowa")
+iowa.counties.covid.21q1 <- us.counties.covid.21q1 %>%
+  dplyr::select(date, region, subregion, pop2010, cases, cases.1day, deaths, deaths.1day) %>%
+  filter(region == "Iowa")
+iowa.counties.covid.22q1 <- us.counties.covid.22q1 %>%
+  dplyr::select(date, region, subregion, pop2010, cases, cases.1day, deaths, deaths.1day) %>%
+  filter(region == "Iowa")
+```
+
+
+
+```{r}
+cases.iowa.counties.21q1 <- iowa.counties.covid.21q1 %>%
+  drop_na() %>%
+  group_by(subregion) %>%
+  slice(c(1, n())) %>%
+  mutate(cases.q1 = (cases - lag(cases, default = first(cases))),
+         deaths.q1 = (deaths - lag(deaths, default = first(deaths))),
+         cases.per100k = 100000*cases.q1 / pop2010,
+         deaths.per100k = 100000*deaths.q1 / pop2010,
+         deaths.div.cases = deaths.q1 / cases.q1,
+         deaths.div.cases.per100k = deaths.per100k / cases.per100k,
+         cases.div.deaths = cases.q1 / deaths.q1,
+         cases.div.deaths.per100k = cases.per100k / deaths.per100k,
+         plot.cases = NA,
+         plot.deaths = NA) %>%
+  slice(n()) %>%
+  ungroup() %>%
+  as.data.frame()
+  
+cases.iowa.counties.22q1 <- iowa.counties.covid.22q1 %>%
+  drop_na() %>%
+  group_by(subregion) %>%
+  slice(c(1, n())) %>%
+  mutate(cases.q1 = (cases - lag(cases, default = first(cases))),
+         deaths.q1 = (deaths - lag(deaths, default = first(deaths))),
+         cases.per100k = 100000*cases.q1 / pop2010,
+         deaths.per100k = 100000*deaths.q1 / pop2010,
+         # plot.cases = NA,
+         # plot.deaths = NA,
+         deaths.div.cases = deaths.q1 / cases.q1,
+         deaths.div.cases.per100k = deaths.per100k / cases.per100k,
+         cases.div.deaths = cases.q1 / deaths.q1,
+         cases.div.deaths.per100k = cases.per100k / deaths.per100k) %>%
+  slice(n()) %>%
+  ungroup() %>%
+  as.data.frame()
+```
+
+
+
+```{r}
+# sparkline(0)
+
+table.21q1 <- cases.iowa.counties.21q1 %>%
+  dplyr::select(subregion, pop2010, cases.q1, cases.per100k, deaths.q1, deaths.per100k, cases.div.deaths) %>%
+  kbl(col.names = c("County",
+                    "Population",
+                    "Cases for 1st quarter",
+                    "Cases per 100k",
+                    "Deaths for 1st quarter",
+                    "Deaths per 100k",
+                    "Cases by Deaths"),
+      align = c("r","r","r","r","r","r","r"),
+      digits = 0,
+      caption = "Iowa County COVID data for Quarter 1, 2021") %>%
+#  add_header_above(c(" ", " ", " ", " ", " ", " ", " ", "per 100k" = 3, " ", " ", " ", "per 100k" = 3, " ", "per 100k", = 3,)) %>%
+  kable_styling(font_size = 18, fixed_thead = TRUE) %>%
+  scroll_box(width = "100%", height = "700px") %>%
+#  kable_material(lightable_options = c("striped", "hover"))
+  kable_paper(lightable_options = "hover", full_width = FALSE)
+#  kable_classic(full_width = FALSE, html_font = "helvetica")
+table.21q1
+
+table.22q1 <- cases.iowa.counties.22q1 %>%
+  dplyr::select(subregion, pop2010, cases.q1, cases.per100k, deaths.q1, deaths.per100k, cases.div.deaths) %>%
+  kbl(col.names = c("County",
+                    "Population",
+                    "Cases for 1st quarter",
+                    "Cases per 100k",
+                    "Deaths for 1st quarter",
+                    "Deaths per 100k",
+                    "Cases by Deaths"),
+      align = c("r","r","r","r","r","r","r"),
+      digits = 0,
+      caption = "Iowa County COVID data for Quarter 1, 2022") %>%
+#  add_header_above(c(" ", " ", " ", " ", " ", " ", " ", "per 100k" = 3, " ", " ", " ", "per 100k" = 3, " ", "per 100k", = 3,)) %>%
+  kable_styling(font_size = 18, fixed_thead = TRUE) %>%
+  scroll_box(width = "100%", height = "700px") %>%
+#  kable_material(lightable_options = c("striped", "hover"))
+  kable_paper(lightable_options = "hover", full_width = FALSE)
+#  kable_classic(full_width = FALSE, html_font = "helvetica")
+table.22q1
+```
